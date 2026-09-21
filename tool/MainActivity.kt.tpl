@@ -21,10 +21,10 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "prepare" -> {
                         val bind = call.argument<Boolean>("bindWifi") ?: false
-                        result.success(prepare(bind))
+                        result.success(hrPrepare(bind))
                     }
                     "release" -> {
-                        release()
+                        hrRelease()
                         result.success(true)
                     }
                     "getPref" -> {
@@ -43,7 +43,7 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    private fun prepare(bindWifi: Boolean): Boolean {
+    private fun hrPrepare(bindWifi: Boolean): Boolean {
         try {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -86,7 +86,7 @@ class MainActivity : FlutterActivity() {
         return bound
     }
 
-    private fun release() {
+    private fun hrRelease() {
         try {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()
