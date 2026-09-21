@@ -1,0 +1,76 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Generate Android project
+        run: |
+          flutter create --platforms=android --org com.sirfelix --project-name hotspot_racers /tmp/gen
+          cp -r /tmp/gen/android ./android
+
+      - name: Patch Android project
+        run: python3 tool/patch_android.py
+
+      - name: Restore debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build release APK
+        run: flutter build apk --release --target-platform android-arm,android-arm64 --build-number=${{ github.run_number }}
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/HotspotRacers.apk
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HotspotRacers-apk
+          path: dist/HotspotRacers.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "build-${{ github.run_number }}" dist/HotspotRacers.apk \
+            --title "Hotspot Racers build ${{ github.run_number }}" \
+            --notes "Sideload APK. Built for Android 9 and Android Go (works on Android 7+). Contains 32-bit and 64-bit ARM." \
+            --target "${{ github.sha }}"
