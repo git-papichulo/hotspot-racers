@@ -14,6 +14,10 @@ const Color _curbCol = Color(0xFFD9A521);
 const Color _roadCol = Color(0xFF6D4A3A);
 const Color _ink = Color(0xFF111111);
 
+/// World units visible top-to-bottom in the in-race chase camera. Smaller =
+/// closer / more zoomed in. Tune this to taste.
+const double kCameraViewH = 640;
+
 Future<ui.Image> renderTrackImage(Track t, double scale) async {
   final w = (kWorldW * scale).round();
   final h = (kWorldH * scale).round();
@@ -235,15 +239,26 @@ class RacePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final scale = math.min(size.width / kWorldW, size.height / kWorldH);
-    final ox = (size.width - kWorldW * scale) / 2;
-    final oy = (size.height - kWorldH * scale) / 2;
     _p.style = PaintingStyle.fill;
     _p.color = _grassA;
     canvas.drawRect(Offset.zero & size, _p);
+
+    final me = s.myCar;
     canvas.save();
-    canvas.translate(ox, oy);
-    canvas.scale(scale, scale);
+    if (me != null) {
+      // Close chase camera: follow the player's own car and zoom in for an
+      // immersive, driver's-eye feel instead of showing the whole track.
+      final zoom = size.height / kCameraViewH;
+      canvas.translate(size.width / 2, size.height / 2);
+      canvas.scale(zoom, zoom);
+      canvas.translate(-me.x, -me.y);
+    } else {
+      // No car of our own yet (e.g. between races) - fall back to a full
+      // fit-the-track view instead of centering on nothing.
+      final scale = math.min(size.width / kWorldW, size.height / kWorldH);
+      canvas.translate((size.width - kWorldW * scale) / 2, (size.height - kWorldH * scale) / 2);
+      canvas.scale(scale, scale);
+    }
     final image = bg;
     if (image != null) {
       canvas.drawImageRect(
@@ -253,7 +268,6 @@ class RacePainter extends CustomPainter {
         _img,
       );
     }
-    final me = s.myCar;
     for (final c in s.cars) {
       if (c != me) {
         drawCar(canvas, c, _p);
