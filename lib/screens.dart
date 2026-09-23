@@ -19,6 +19,8 @@ const Color kMuted = Color(0xFF8FA3B8);
 
 const TextStyle kMutedStyle = TextStyle(fontSize: 13, color: kMuted);
 const TextStyle kBoldStyle = TextStyle(fontSize: 16, fontWeight: FontWeight.w700);
+const TextStyle kSectionLabelStyle = TextStyle(fontSize: 12, letterSpacing: 1.4, fontWeight: FontWeight.w800, color: kMuted);
+const TextStyle kValueStyle = TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white);
 
 // ---------------------------------------------------------------------------
 // shared widgets
@@ -27,23 +29,31 @@ const TextStyle kBoldStyle = TextStyle(fontSize: 16, fontWeight: FontWeight.w700
 class Panel extends StatelessWidget {
   final String title;
   final Widget child;
+  final Color accent;
 
-  const Panel({super.key, required this.title, required this.child});
+  const Panel({super.key, required this.title, required this.child, this.accent = kAccent});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: kPanel, borderRadius: BorderRadius.circular(16)),
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(color: kPanel, borderRadius: BorderRadius.circular(18)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            title,
-            style: const TextStyle(fontSize: 12, letterSpacing: 1.5, fontWeight: FontWeight.w700, color: kMuted),
+          Row(
+            children: <Widget>[
+              Container(
+                width: 6,
+                height: 14,
+                decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(3)),
+              ),
+              const SizedBox(width: 8),
+              Text(title, style: kSectionLabelStyle),
+            ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           child,
         ],
       ),
@@ -237,12 +247,13 @@ class _MenuScreenState extends State<MenuScreen> {
                     title: 'HOW TO PLAY',
                     child: Text(
                       'One phone turns on its hotspot and taps Host. Everyone else connects to that Wi-Fi and taps Join. '
-                      'Hold the left half of the screen to steer left, the right half to steer right. Hold both to brake. Gas is automatic.',
+                      'Drag the joystick to steer - pull it back to brake. Gas is automatic.',
                       style: kMutedStyle,
                     ),
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
+                    activeColor: kAccent,
                     value: Settings.lowFps,
                     title: const Text('Battery saver (30 FPS)'),
                     subtitle: const Text('Helps very old phones', style: kMutedStyle),
@@ -621,23 +632,37 @@ class LobbyScreen extends StatelessWidget {
     );
   }
 
+  Widget _stepBtn(IconData icon, VoidCallback? onTap) {
+    final bool on = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: on ? kAccent.withOpacity(0.18) : Colors.white.withOpacity(0.04),
+          shape: BoxShape.circle,
+          border: Border.all(color: on ? kAccent : Colors.white24, width: 1.5),
+        ),
+        child: Icon(icon, size: 18, color: on ? kAccent : Colors.white24),
+      ),
+    );
+  }
+
   Widget _stepper(String label, int value, int min, int max, void Function(int)? onChange) {
-    return Row(
-      children: <Widget>[
-        Expanded(child: Text(label, style: const TextStyle(fontSize: 16))),
-        IconButton(
-          onPressed: (onChange != null && value > min) ? () => onChange(value - 1) : null,
-          icon: const Icon(Icons.remove_circle_outline),
-        ),
-        SizedBox(
-          width: 34,
-          child: Center(child: Text('$value', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800))),
-        ),
-        IconButton(
-          onPressed: (onChange != null && value < max) ? () => onChange(value + 1) : null,
-          icon: const Icon(Icons.add_circle_outline),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: <Widget>[
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600))),
+          _stepBtn(Icons.remove, (onChange != null && value > min) ? () => onChange(value - 1) : null),
+          SizedBox(
+            width: 46,
+            child: Center(child: Text('$value', style: kValueStyle.copyWith(fontSize: 20))),
+          ),
+          _stepBtn(Icons.add, (onChange != null && value < max) ? () => onChange(value + 1) : null),
+        ],
+      ),
     );
   }
 
@@ -759,6 +784,13 @@ class LobbyScreen extends StatelessWidget {
                           label: Text(kDiffNames[i]),
                           selected: s.cfg.diff == i,
                           onSelected: host ? (bool v) => s.setDiff(i) : null,
+                          selectedColor: kAccent,
+                          backgroundColor: kBg,
+                          labelStyle: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: s.cfg.diff == i ? Colors.white : kMuted,
+                          ),
+                          side: BorderSide(color: s.cfg.diff == i ? kAccent : Colors.white24),
                         ),
                     ],
                   ),
@@ -824,9 +856,15 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
   bool _bgStarted = false;
   Duration _last = Duration.zero;
   bool _skip = false;
-  final Map<int, int> _sides = <int, int>{};
   double _steer = 0;
   bool _brake = false;
+
+  static const double _joyRadius = 58;
+  static const double _joyZoneTop = 140;
+  static const double _joyBrakeThreshold = 0.45;
+  int? _joyPointer;
+  Offset _joyBase = Offset.zero;
+  final ValueNotifier<_JoyState> _joyVis = ValueNotifier<_JoyState>(const _JoyState());
 
   @override
   void initState() {
@@ -841,8 +879,12 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
       _bgStarted = true;
       final size = MediaQuery.sizeOf(context);
       final dpr = MediaQuery.devicePixelRatioOf(context);
-      final fit = math.min(size.width / kWorldW, size.height / kWorldH) * dpr;
-      final scale = (fit * 0.85).clamp(0.5, 1.2).toDouble();
+      // Render the cached track texture at (roughly) the same pixel density
+      // the zoomed-in chase camera will display it at, so it stays sharp up
+      // close instead of the old whole-track resolution going blurry.
+      final camScale = size.height / kCameraViewH;
+      final cap = Settings.lowFps ? 1.5 : 2.0;
+      final scale = (camScale * dpr).clamp(0.6, cap).toDouble();
       _loadBg(scale);
     }
   }
@@ -867,6 +909,7 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
     _ticker.dispose();
     _frame.dispose();
     _hud.dispose();
+    _joyVis.dispose();
     _bg?.dispose();
     super.dispose();
   }
@@ -912,22 +955,41 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _pt(PointerEvent e) {
-    final w = MediaQuery.sizeOf(context).width;
-    _sides[e.pointer] = e.localPosition.dx < w / 2 ? -1 : 1;
-    _recalc();
+  void _joyDown(PointerEvent e) {
+    if (_joyPointer != null || e.localPosition.dy < _joyZoneTop) {
+      return;
+    }
+    _joyPointer = e.pointer;
+    _joyBase = e.localPosition;
+    _applyJoy(e.localPosition);
   }
 
-  void _rm(PointerEvent e) {
-    _sides.remove(e.pointer);
-    _recalc();
+  void _joyMove(PointerEvent e) {
+    if (e.pointer != _joyPointer) {
+      return;
+    }
+    _applyJoy(e.localPosition);
   }
 
-  void _recalc() {
-    final l = _sides.containsValue(-1);
-    final r = _sides.containsValue(1);
-    _steer = (r ? 1.0 : 0.0) - (l ? 1.0 : 0.0);
-    _brake = l && r;
+  void _joyUp(PointerEvent e) {
+    if (e.pointer != _joyPointer) {
+      return;
+    }
+    _joyPointer = null;
+    _steer = 0;
+    _brake = false;
+    _joyVis.value = const _JoyState();
+  }
+
+  void _applyJoy(Offset pos) {
+    var d = pos - _joyBase;
+    final dist = d.distance;
+    if (dist > _joyRadius) {
+      d = d * (_joyRadius / dist);
+    }
+    _steer = (d.dx / _joyRadius).clamp(-1.0, 1.0).toDouble();
+    _brake = d.dy > _joyRadius * _joyBrakeThreshold;
+    _joyVis.value = _JoyState(active: true, base: _joyBase, knob: d, brake: _brake);
   }
 
   Future<void> _confirmLeave() async {
@@ -952,29 +1014,24 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
 
   Widget _pill(String label, String value, Color c) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: BoxDecoration(
-        color: const Color(0xFF2B3440),
+        color: const Color(0xCC1B2430),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Colors.black, width: 3),
+        border: Border.all(color: Colors.white.withOpacity(0.12), width: 1.5),
+        boxShadow: const <BoxShadow>[BoxShadow(color: Color(0x55000000), blurRadius: 8, offset: Offset(0, 3))],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white70)),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white60, letterSpacing: 0.6),
+          ),
           const SizedBox(width: 8),
           Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: c)),
         ],
       ),
-    );
-  }
-
-  Widget _hint(IconData icon) {
-    return Container(
-      width: 56,
-      height: 56,
-      decoration: const BoxDecoration(color: Color(0x66000000), shape: BoxShape.circle),
-      child: Icon(icon, color: Colors.white70, size: 30),
     );
   }
 
@@ -1041,57 +1098,51 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
       backgroundColor: const Color(0xFF8CB30B),
       body: Listener(
         behavior: HitTestBehavior.opaque,
-        onPointerDown: _pt,
-        onPointerMove: _pt,
-        onPointerUp: _rm,
-        onPointerCancel: _rm,
+        onPointerDown: _joyDown,
+        onPointerMove: _joyMove,
+        onPointerUp: _joyUp,
+        onPointerCancel: _joyUp,
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
             RepaintBoundary(child: CustomPaint(painter: RacePainter(s, _bg, _frame))),
             Positioned.fill(
+              child: IgnorePointer(
+                child: ValueListenableBuilder<_JoyState>(
+                  valueListenable: _joyVis,
+                  builder: (BuildContext c, _JoyState j, Widget? w) => CustomPaint(painter: _JoystickPainter(j, _joyRadius)),
+                ),
+              ),
+            ),
+            Positioned.fill(
               child: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.all(10),
-                  child: Column(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          ValueListenableBuilder<Hud>(
-                            valueListenable: _hud,
-                            builder: (BuildContext c, Hud h, Widget? w) => _pill('POS', '${h.place}/${h.total}', kAccent),
-                          ),
-                          GestureDetector(
-                            onTap: _confirmLeave,
-                            child: Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.black, width: 3),
-                              ),
-                              child: const Icon(Icons.close, color: Colors.black, size: 22),
-                            ),
-                          ),
-                          ValueListenableBuilder<Hud>(
-                            valueListenable: _hud,
-                            builder: (BuildContext c, Hud h, Widget? w) => _pill('LAP', '${h.lap}/${h.laps}', kCoral),
-                          ),
-                        ],
+                      ValueListenableBuilder<Hud>(
+                        valueListenable: _hud,
+                        builder: (BuildContext c, Hud h, Widget? w) => _pill('POS', '${h.place}/${h.total}', kAccent),
                       ),
-                      const Spacer(),
-                      IgnorePointer(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: <Widget>[
-                            _hint(Icons.arrow_back),
-                            const Text('hold both = brake', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                            _hint(Icons.arrow_forward),
-                          ],
+                      GestureDetector(
+                        onTap: _confirmLeave,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: const Color(0xCC1B2430),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white.withOpacity(0.12), width: 1.5),
+                            boxShadow: const <BoxShadow>[BoxShadow(color: Color(0x55000000), blurRadius: 8, offset: Offset(0, 3))],
+                          ),
+                          child: const Icon(Icons.close, color: Colors.white70, size: 22),
                         ),
+                      ),
+                      ValueListenableBuilder<Hud>(
+                        valueListenable: _hud,
+                        builder: (BuildContext c, Hud h, Widget? w) => _pill('LAP', '${h.lap}/${h.laps}', kCoral),
                       ),
                     ],
                   ),
@@ -1134,4 +1185,52 @@ class _RaceScreenState extends State<RaceScreen> with SingleTickerProviderStateM
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// virtual joystick
+// ---------------------------------------------------------------------------
+
+class _JoyState {
+  final bool active;
+  final Offset base;
+  final Offset knob;
+  final bool brake;
+
+  const _JoyState({this.active = false, this.base = Offset.zero, this.knob = Offset.zero, this.brake = false});
+}
+
+class _JoystickPainter extends CustomPainter {
+  final _JoyState j;
+  final double radius;
+
+  const _JoystickPainter(this.j, this.radius);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Idle: a faint fixed hint near the bottom-left so players know where to
+    // put their thumb. Active: the base snaps to wherever they touched down
+    // (a "floating" joystick), and the knob follows the drag, clamped to
+    // [radius], with the knob tinting coral while braking for clear feedback.
+    final Offset base = j.active ? j.base : Offset(28 + radius, size.height - 28 - radius);
+    final double fade = j.active ? 1.0 : 0.4;
+    final Paint fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.black.withOpacity(0.28 * fade);
+    final Paint ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..color = Colors.white.withOpacity(0.55 * fade);
+    canvas.drawCircle(base, radius, fill);
+    canvas.drawCircle(base, radius, ring);
+    final Offset knobCenter = base + (j.active ? j.knob : Offset.zero);
+    final Paint knob = Paint()
+      ..style = PaintingStyle.fill
+      ..color = (j.brake ? kCoral : kAccent).withOpacity(0.55 + 0.35 * fade);
+    canvas.drawCircle(knobCenter, radius * 0.42, knob);
+  }
+
+  @override
+  bool shouldRepaint(covariant _JoystickPainter old) =>
+      old.j.active != j.active || old.j.base != j.base || old.j.knob != j.knob || old.j.brake != j.brake;
 }
